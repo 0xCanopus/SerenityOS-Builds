@@ -1,0 +1,97 @@
+name: "Build SerenityOS ISO"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
+          sudo docker image prune --all --force
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Clone SerenityOS
+        run: |
+          git clone --depth=1 --single-branch https://github.com/SerenityOS/serenity.git
+          cd serenity
+          SERENITY_COMMIT=$(git rev-parse --short HEAD)
+          echo "SERENITY_COMMIT=${SERENITY_COMMIT}" >> $GITHUB_ENV
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build ccache \
+            curl libmpfr-dev libmpc-dev libgmp-dev \
+            e2fsprogs qemu-utils rsync unzip texinfo \
+            libssl-dev zlib1g-dev fuse2fs genisoimage \
+            grub-pc-bin grub-common mtools parted xorriso
+
+      - name: Setup Ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: serenity-ccache-${{ runner.os }}-${{ env.SERENITY_COMMIT }}
+          restore-keys: |
+            serenity-ccache-${{ runner.os }}-
+
+      - name: Configure Ccache
+        run: |
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+
+      - name: Build Toolchain & System Image
+        working-directory: serenity
+        env:
+          SERENITY_ARCH: x86_64
+        run: |
+          # Build the cross-compiler toolchain and image target
+          Meta/serenity.sh build
+
+      - name: Build Grub ISO Image
+        working-directory: serenity
+        run: |
+          # Build the bootable image target
+          cmake --build Build/x86_64 --target grub-image
+          
+          # Rename and compress the output artifact
+          OUTPUT_NAME="serenity-x86_64-${{ env.SERENITY_COMMIT }}.iso"
+          if [ -f "Build/x86_64/grub-image.iso" ]; then
+            mv Build/x86_64/grub-image.iso "../${OUTPUT_NAME}"
+          elif [ -f "Build/x86_64/serenity.iso" ]; then
+            mv Build/x86_64/serenity.iso "../${OUTPUT_NAME}"
+          else
+            # If disk image (.img/.bin) was produced instead of an ISO:
+            IMAGE_FILE=$(find Build/x86_64 -maxdepth 1 -type f \( -name "*.img" -o -name "*.bin" \) | head -n 1)
+            mv "${IMAGE_FILE}" "../serenity-x86_64-${{ env.SERENITY_COMMIT }}.img"
+            OUTPUT_NAME="serenity-x86_64-${{ env.SERENITY_COMMIT }}.img"
+          fi
+          
+          cd ..
+          gzip -9 "${OUTPUT_NAME}"
+          echo "RELEASE_ARTIFACT=${OUTPUT_NAME}.gz" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "serenity-${{ env.SERENITY_COMMIT }}"
+          name: "SerenityOS Build (${{ env.SERENITY_COMMIT }})"
+          body: |
+            Automated build of SerenityOS.
+            Upstream commit: [SerenityOS/serenity@${{ env.SERENITY_COMMIT }}](https://github.com/SerenityOS/serenity/commit/${{ env.SERENITY_COMMIT }})
+          files: ${{ env.RELEASE_ARTIFACT }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
