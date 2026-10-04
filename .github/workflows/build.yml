@@ -52,7 +52,7 @@ jobs:
           ccache --set-config=max_size=5G
           ccache --set-config=compression=true
 
-            - name: Build Bootable ISO Image
+      - name: Build Bootable ISO Image
         working-directory: serenity
         env:
           SERENITY_ARCH: x86_64
