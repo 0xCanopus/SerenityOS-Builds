@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
 
@@ -36,7 +36,8 @@ jobs:
             curl libmpfr-dev libmpc-dev libgmp-dev \
             e2fsprogs qemu-utils rsync unzip texinfo \
             libssl-dev zlib1g-dev fuse2fs genisoimage \
-            grub-pc-bin grub-common mtools parted xorriso
+            grub-pc-bin grub-common mtools parted xorriso \
+            g++-15 gcc-15
 
       - name: Setup Ccache
         uses: actions/cache@v4
@@ -55,15 +56,15 @@ jobs:
         working-directory: serenity
         env:
           SERENITY_ARCH: x86_64
+          CC: gcc-15
+          CXX: g++-15
         run: |
-          # Build the cross-compiler toolchain and image target
           Meta/serenity.sh build
 
       - name: Build Grub ISO Image
         working-directory: serenity
         run: |
-          # Build the bootable image target
-          cmake --build Build/x86_64 --target grub-image
+          ninja grub-image
           
           # Rename and compress the output artifact
           OUTPUT_NAME="serenity-x86_64-${{ env.SERENITY_COMMIT }}.iso"
