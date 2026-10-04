@@ -52,36 +52,56 @@ jobs:
           ccache --set-config=max_size=5G
           ccache --set-config=compression=true
 
-      - name: Build Toolchain & System Image
+            - name: Build Bootable ISO Image
         working-directory: serenity
         env:
           SERENITY_ARCH: x86_64
-          CC: gcc-15
-          CXX: g++-15
         run: |
-          Meta/serenity.sh build
+          # 1. Build the system components (kernel, rootfs, limine binaries)
+          Meta/serenity.sh image
 
-      - name: Build Grub ISO Image
-        working-directory: serenity
-        run: |
-          ninja grub-image
-          
-          # Rename and compress the output artifact
+          # 2. Set up the ISO staging folder
+          ISO_ROOT="Build/x86_64/iso_root"
+          rm -rf "${ISO_ROOT}"
+          mkdir -p "${ISO_ROOT}/boot/limine"
+
+          # 3. Copy the kernel, initrd, and boot configuration from the build output
+          cp Build/x86_64/Root/boot/Kernel.bin "${ISO_ROOT}/boot/"
+          [ -f Build/x86_64/Root/boot/initrd.img ] && cp Build/x86_64/Root/boot/initrd.img "${ISO_ROOT}/boot/"
+
+          # Copy Limine stage files and config
+          # Serenity downloads and builds Limine inside the build tree
+          LIMINE_DIR=$(find Build/x86_64 -type d -name "limine" | head -n 1)
+          cp "${LIMINE_DIR}/limine-bios.sys" "${ISO_ROOT}/boot/limine/"
+          cp "${LIMINE_DIR}/limine-bios-cd.bin" "${ISO_ROOT}/boot/limine/"
+          cp "${LIMINE_DIR}/limine-uefi-cd.bin" "${ISO_ROOT}/boot/limine/" 2>/dev/null || true
+
+          # Create the Limine bootloader configuration
+          cat << 'EOF' > "${ISO_ROOT}/boot/limine/limine.conf"
+          timeout: 3
+
+          /SerenityOS
+              protocol: limine
+              kernel_path: boot():/boot/Kernel.bin
+              kernel_cmdline: boot_mode=graphical
+          EOF
+
+          # 4. Generate the ISO using xorriso
           OUTPUT_NAME="serenity-x86_64-${{ env.SERENITY_COMMIT }}.iso"
-          if [ -f "Build/x86_64/grub-image.iso" ]; then
-            mv Build/x86_64/grub-image.iso "../${OUTPUT_NAME}"
-          elif [ -f "Build/x86_64/serenity.iso" ]; then
-            mv Build/x86_64/serenity.iso "../${OUTPUT_NAME}"
-          else
-            # If disk image (.img/.bin) was produced instead of an ISO:
-            IMAGE_FILE=$(find Build/x86_64 -maxdepth 1 -type f \( -name "*.img" -o -name "*.bin" \) | head -n 1)
-            mv "${IMAGE_FILE}" "../serenity-x86_64-${{ env.SERENITY_COMMIT }}.img"
-            OUTPUT_NAME="serenity-x86_64-${{ env.SERENITY_COMMIT }}.img"
-          fi
-          
+          xorriso -as mkisofs \
+            -b boot/limine/limine-bios-cd.bin \
+            -no-emul-boot -boot-load-size 4 -boot-info-table \
+            --efi-boot boot/limine/limine-uefi-cd.bin \
+            -efi-boot-part --efi-boot-image --protective-msdos-label \
+            "${ISO_ROOT}" -o "../${OUTPUT_NAME}"
+
+          # 5. Embed the Limine MBR to make it a hybrid ISO (bootable via CD and USB)
+          "${LIMINE_DIR}/limine" bios-install "../${OUTPUT_NAME}"
+
           cd ..
           gzip -9 "${OUTPUT_NAME}"
           echo "RELEASE_ARTIFACT=${OUTPUT_NAME}.gz" >> $GITHUB_ENV
+
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
