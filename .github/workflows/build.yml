@@ -38,7 +38,7 @@ jobs:
             libssl-dev zlib1g-dev fuse2fs genisoimage \
             grub-pc-bin grub-common mtools parted xorriso \
             gcc-15 g++-15 \
-            clang llvm lld
+            clang llvm lld nasm
 
           # Ensure gcc/g++ default to version 15
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100 \
