@@ -37,7 +37,12 @@ jobs:
             e2fsprogs qemu-utils rsync unzip texinfo \
             libssl-dev zlib1g-dev fuse2fs genisoimage \
             grub-pc-bin grub-common mtools parted xorriso \
-            g++-15 gcc-15
+            gcc-15 g++-15 \
+            clang llvm lld
+
+          # Ensure gcc/g++ default to version 15
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-15 100 \
+            --slave /usr/bin/g++ g++ /usr/bin/g++-15
 
       - name: Setup Ccache
         uses: actions/cache@v4
@@ -51,39 +56,49 @@ jobs:
         run: |
           ccache --set-config=max_size=5G
           ccache --set-config=compression=true
+          ccache -z
 
-      - name: Build Bootable ISO
+      - name: Build Limine Disk Image
         working-directory: serenity
         env:
           SERENITY_ARCH: x86_64
           SERENITY_RUN: limine
+          SERENITY_TOOLCHAIN: GNU
+          CC: gcc-15
+          CXX: g++-15
         run: |
-          # 1. Build the Limine-targeted image
           Meta/serenity.sh image
 
-          # 2. Locate the raw disk image
-          IMAGE_FILE=$(find Build/x86_64 -maxdepth 1 -type f \( -name "limine_disk_image" -o -name "_disk_image" \) | head -n 1)
+      - name: Package El Torito Bootable ISO
+        working-directory: serenity
+        run: |
+          IMAGE_PATH=$(find Build/x86_64 -maxdepth 1 -type f \( -name "limine_disk_image" -o -name "_disk_image" \) | head -n 1)
 
-          if [ -z "${IMAGE_FILE}" ]; then
-            echo "Error: Disk image not found in Build/x86_64/"
+          if [ -z "${IMAGE_PATH}" ]; then
+            echo "::error::Disk image not found in Build/x86_64/"
             exit 1
           fi
 
+          echo "Found disk image at: ${IMAGE_PATH}"
           OUTPUT_ISO="serenity-limine-x86_64-${{ env.SERENITY_COMMIT }}.iso"
 
-          # 3. Wrap the full image into an El Torito bootable ISO
           xorriso -as mkisofs \
             -o "../${OUTPUT_ISO}" \
             -hard-disk-boot \
-            -b "$(basename ${IMAGE_FILE})" \
+            -b "$(basename ${IMAGE_PATH})" \
             -no-emul-boot \
-            "${IMAGE_FILE}"
+            "${IMAGE_PATH}"
 
-          # 4. Compress for GitHub release limits and upload speed
-          cd ..
+          echo "OUTPUT_ISO=${OUTPUT_ISO}" >> $GITHUB_ENV
+
+      - name: Compress ISO Artifact
+        run: |
           gzip -9 "${OUTPUT_ISO}"
           echo "RELEASE_ARTIFACT=${OUTPUT_ISO}.gz" >> $GITHUB_ENV
 
+      - name: Show Ccache Statistics
+        run: |
+          ccache -s
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
